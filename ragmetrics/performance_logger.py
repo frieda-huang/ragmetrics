@@ -1,5 +1,6 @@
 import atexit
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -26,24 +27,28 @@ class PerformanceLogger:
             current_dir = current_dir.parent
         return None
 
-    def log(self, metric_name: str, function_name: str, value: str, unit: str):
+    def log(self, metric_name: str, function_name: str, value: str):
         self.metrics_log.append(
             {
                 "metric": metric_name,
                 "function_name": function_name,
                 "value": value,
-                "unit": unit,
             }
         )
 
     def save_to_file(self):
-        filename = (
-            datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "_performance_log.json"
-        )
+        if not self.metrics_log:
+            return
+
+        filename = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".json"
         project_root = self.find_project_root()
 
         if project_root:
-            filepath = project_root / filename
+            folder_path = project_root / "performance_logs"
+            if not os.path.exists(folder_path):
+                os.makedirs(folder_path)
+
+            filepath = folder_path / filename
             with open(filepath, "w") as f:
                 json.dump(self.metrics_log, f, indent=4, ensure_ascii=False)
             print(f"Performance log saved to {filename}")
