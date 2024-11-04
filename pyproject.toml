@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "ragmetrics"
+version = "0.1.0"
+description = ""
+authors = ["Frieda Huang <jingyingfhuang@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+torchmetrics = "^1.5.1"
+datasets = "^3.1.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
