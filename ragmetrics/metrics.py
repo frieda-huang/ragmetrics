@@ -13,8 +13,10 @@ from torchmetrics.retrieval import (
     RetrievalPrecision,
     RetrievalRecall,
 )
+from functools import lru_cache
 
 ERROR_MSG = "No compatible GPU backend found (CUDA or MPS required)."
+MB_DIVISOR = 1024**2
 
 
 class MetricsType(Enum):
@@ -142,7 +144,7 @@ def measure_ram(custom_msg=None):
             PerformanceLogger(
                 "ram_usage",
                 func.__name__,
-                f"RAM Usage - Current: {current / (1024 ** 2):.2f} MB, Peak: {peak / (1024 ** 2):.2f} MB",
+                f"RAM Usage - Current: {current / MB_DIVISOR:.2f} MB, Peak: {peak / MB_DIVISOR:.2f} MB",
                 custom_msg,
             )
 
@@ -162,18 +164,27 @@ def measure_vram(custom_msg=None):
         @wraps(func)
         def wrapper(*args, **kwargs):
 
-            torch.cuda.reset_peak_memory_stats(device=None)
+            if torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats(device=None)
 
             result = func(*args, **kwargs)
 
-            vram_used = torch.cuda.max_memory_allocated(device=None)
+            if torch.mps.is_available():
+                allocated_memory = torch.mps.current_allocated_memory()
+                total_allocated_memory = torch.mps.driver_allocated_memory()
+                value = (
+                    f"VRAM currently allocated memory: {allocated_memory / MB_DIVISOR:.2f} MB\n"
+                    f"Total memory allocated by the driver: {total_allocated_memory / MB_DIVISOR:.2f} MB"
+                )
 
-            print(f"{func.__name__} used {vram_used / (1024 ** 2):.2f} MB of VRAM")
+            if torch.cuda.is_available():
+                vram_used = torch.cuda.max_memory_allocated(device=None)
+                value = f"VRAM usage: {vram_used / MB_DIVISOR:.2f} MB"
 
             PerformanceLogger(
                 "vram_usage",
                 func.__name__,
-                f"VRAM Usage ({func.__name__}): {vram_used / (1024 ** 2):.2f} MB",
+                value,
                 custom_msg,
             )
 
@@ -208,14 +219,13 @@ def generate_indexes_tensor(query_indices: List[int], top_k: int) -> torch.Tenso
         this will create a tensor like tensor([0, 0, 0, 0, 0, 1, 1, 1, 1, 1]),
         where each number corresponds to the query ID for the top_k retrieved items
     """
-    return torch.cat(
-        (
-            torch.full(
-                top_k,
-            ),
-            i,
-        )
-        for i in range(len(query_indices))
+    return torch.cat([torch.full((top_k,), i) for i in range(len(query_indices))])
+
+
+@lru_cache(maxsize=3)
+def fetch_dataset(dataset_name: str, dataset_size: Optional[int] = None):
+    return load_dataset(
+        dataset_name, split=f"test[:{dataset_size}]" if dataset_size else "test"
     )
 
 
@@ -223,7 +233,7 @@ def calculate_metrics_colpali(
     metrics: List[MetricsType],
     top_k=10,
     dataset="vidore/syntheticDocQA_artificial_intelligence_test",
-    dataset_size: Optional[int] = None,
+    dataset_size: Optional[int] = 16,
 ):
     """Evaluate retrieval performance using specified metrics:
 
@@ -242,12 +252,10 @@ def calculate_metrics_colpali(
         Loads the entire dataset if set to None
     """
 
-    ds = load_dataset(
-        dataset, split=f"test[:{dataset_size}]" if dataset_size else "test"
-    )
+    ds = fetch_dataset(dataset, dataset_size)
 
     def decorator(func):
-        @wraps
+        @wraps(func)
         def wrapper(*args, **kwargs):
             scores = func(*args, **kwargs)
             top_k_scores, top_k_indices = torch.topk(scores, k=top_k, dim=1)
