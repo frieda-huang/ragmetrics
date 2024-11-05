@@ -60,6 +60,9 @@ def measure_latency_for_gpu(dummy_input_fn, nb_iters=10, custom_msg=None):
         dummy_input_fn (Callable): A function that returns the dummy input matching your production input shape
         nb_iters (int): Number of iterations to average the execution time
         custom_msg (str): User-defined message for custom log
+
+    # Usage:
+        @measure_latency_for_gpu(dummy_input_fn=lambda: create_dummy_input())
     """
 
     def decorator(func):
