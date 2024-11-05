@@ -27,12 +27,13 @@ class PerformanceLogger:
             current_dir = current_dir.parent
         return None
 
-    def log(self, metric_name: str, function_name: str, value: str):
+    def log(self, metric_name: str, function_name: str, value: str, custom_msg=None):
         self.metrics_log.append(
             {
                 "metric": metric_name,
                 "function_name": function_name,
                 "value": value,
+                "custom_msg": custom_msg,
             }
         )
 

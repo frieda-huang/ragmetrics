@@ -14,6 +14,8 @@ from torchmetrics.retrieval import (
     RetrievalRecall,
 )
 
+ERROR_MSG = "No compatible GPU backend found (CUDA or MPS required)."
+
 
 class MetricsType(Enum):
     recall = "recall"
@@ -33,37 +35,59 @@ metrics_function_mapping = {
 }
 
 
-def measure_latency_for_gpu(dummy_input, model, nb_iters=10):
+def get_torch_event():
+    if torch.cuda.is_available():
+        return torch.cuda.Event(enable_timing=True)
+    elif torch.backends.mps.is_available():  # for Apple Silicon
+        return torch.mps.Event(enable_timing=True)
+    else:
+        raise RuntimeError(ERROR_MSG)
+
+
+def get_torch_synchronize():
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elif torch.mps.is_available():
+        torch.mps.synchronize()
+    else:
+        raise RuntimeError(ERROR_MSG)
+
+
+def measure_latency_for_gpu(dummy_input_fn, nb_iters=10, custom_msg=None):
     """Measure latency for GPU-bound tasks
 
     Args:
-        dummy_input: A sample input matching your production input shape
-        model: Model to be evaluated with dummy input for warmup
-        nb_iters: Number of iterations to average the execution time
+        dummy_input_fn (Callable): A function that returns the dummy input matching your production input shape
+        nb_iters (int): Number of iterations to average the execution time
+        custom_msg (str): User-defined message for custom log
     """
 
     def decorator(func):
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(self, *args, **kwargs):
             # GPU warmup
-            for _ in range(10):
-                _ = model(dummy_input)
+            dummy_input = dummy_input_fn()
 
-            start = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
+            for _ in range(10):
+                _ = self.model(**dummy_input)
+
+            start = get_torch_event()
+            end = get_torch_event()
 
             start.record()
             for _ in range(nb_iters):
-                result = func(*args, **kwargs)
+                result = func(self, *args, **kwargs)
             end.record()
 
-            torch.cuda.current_stream().synchronize()
-            avg_latency = start.elapsed_time(end) / nb_iters * 1e3
+            get_torch_synchronize()
+
+            avg_latency = start.elapsed_time(end) / nb_iters
 
             PerformanceLogger().log(
                 "gpu_latency",
                 func.__name__,
                 f"GPU Average Latency (over {nb_iters} iterations): {avg_latency:.3f} ms",
+                custom_msg,
             )
 
             return result
@@ -73,74 +97,88 @@ def measure_latency_for_gpu(dummy_input, model, nb_iters=10):
     return decorator
 
 
-def measure_latency_for_cpu(func):
+def measure_latency_for_cpu(custom_msg=None):
     """Measure latency for CPU-bound tasks"""
 
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        start = time.perf_counter()
-        result = func(*args, **kwargs)
-        end = time.perf_counter()
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            result = func(*args, **kwargs)
+            end = time.perf_counter()
 
-        duration_ms = (end - start) * 1e3
+            duration_ms = (end - start) * 1e3
 
-        PerformanceLogger().log(
-            "cpu_latency", func.__name__, f"CPU Latency: {duration_ms:.3f} ms"
-        )
+            PerformanceLogger().log(
+                "cpu_latency",
+                func.__name__,
+                f"CPU Latency: {duration_ms:.3f} ms",
+                custom_msg,
+            )
 
-        return result
+            return result
 
-    return wrapper
+        return wrapper
+
+    return decorator
 
 
-def measure_ram(func):
+def measure_ram(custom_msg=None):
     """Measure CPU memory"""
 
-    @wraps(func)
-    def wrapper(*args, **kwargs):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
 
-        tracemalloc.start()
+            tracemalloc.start()
 
-        result = func(*args, **kwargs)
+            result = func(*args, **kwargs)
 
-        current, peak = tracemalloc.get_traced_memory()
+            current, peak = tracemalloc.get_traced_memory()
 
-        PerformanceLogger(
-            "ram_usage",
-            func.__name__,
-            f"RAM Usage - Current: {current / (1024 ** 2):.2f} MB, Peak: {peak / (1024 ** 2):.2f} MB",
-        )
+            PerformanceLogger(
+                "ram_usage",
+                func.__name__,
+                f"RAM Usage - Current: {current / (1024 ** 2):.2f} MB, Peak: {peak / (1024 ** 2):.2f} MB",
+                custom_msg,
+            )
 
-        tracemalloc.stop()
+            tracemalloc.stop()
 
-        return result
+            return result
 
-    return wrapper
+        return wrapper
+
+    return decorator
 
 
-def measure_vram(func):
+def measure_vram(custom_msg=None):
     """Measure GPU memory"""
 
-    @wraps(func)
-    def wrapper(*args, **kwargs):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
 
-        torch.cuda.reset_peak_memory_stats(device=None)
+            torch.cuda.reset_peak_memory_stats(device=None)
 
-        result = func(*args, **kwargs)
+            result = func(*args, **kwargs)
 
-        vram_used = torch.cuda.max_memory_allocated(device=None)
+            vram_used = torch.cuda.max_memory_allocated(device=None)
 
-        print(f"{func.__name__} used {vram_used / (1024 ** 2):.2f} MB of VRAM")
+            print(f"{func.__name__} used {vram_used / (1024 ** 2):.2f} MB of VRAM")
 
-        PerformanceLogger(
-            "vram_usage",
-            func.__name__,
-            f"VRAM Usage ({func.__name__}): {vram_used / (1024 ** 2):.2f} MB",
-        )
+            PerformanceLogger(
+                "vram_usage",
+                func.__name__,
+                f"VRAM Usage ({func.__name__}): {vram_used / (1024 ** 2):.2f} MB",
+                custom_msg,
+            )
 
-        return result
+            return result
 
-    return wrapper
+        return wrapper
+
+    return decorator
 
 
 def generate_target_tensor(top_k_indices: torch.Tensor) -> torch.Tensor:
