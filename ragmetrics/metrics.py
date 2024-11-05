@@ -134,23 +134,22 @@ def measure_ram(custom_msg=None):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-
             tracemalloc.start()
 
-            result = func(*args, **kwargs)
+            try:
+                result = func(*args, **kwargs)
+                current, peak = tracemalloc.get_traced_memory()
 
-            current, peak = tracemalloc.get_traced_memory()
+                PerformanceLogger().log(
+                    "ram_usage",
+                    func.__name__,
+                    f"RAM Usage - Current: {current / MB_DIVISOR:.2f} MB, Peak: {peak / MB_DIVISOR:.2f} MB",
+                    custom_msg,
+                )
 
-            PerformanceLogger(
-                "ram_usage",
-                func.__name__,
-                f"RAM Usage - Current: {current / MB_DIVISOR:.2f} MB, Peak: {peak / MB_DIVISOR:.2f} MB",
-                custom_msg,
-            )
-
-            tracemalloc.stop()
-
-            return result
+                return result
+            finally:
+                tracemalloc.stop()
 
         return wrapper
 
@@ -173,15 +172,16 @@ def measure_vram(custom_msg=None):
                 allocated_memory = torch.mps.current_allocated_memory()
                 total_allocated_memory = torch.mps.driver_allocated_memory()
                 value = (
-                    f"VRAM currently allocated memory: {allocated_memory / MB_DIVISOR:.2f} MB\n"
+                    f"VRAM currently allocated memory: {allocated_memory / MB_DIVISOR:.2f} MB | "
                     f"Total memory allocated by the driver: {total_allocated_memory / MB_DIVISOR:.2f} MB"
                 )
-
-            if torch.cuda.is_available():
+            elif torch.cuda.is_available():
                 vram_used = torch.cuda.max_memory_allocated(device=None)
                 value = f"VRAM usage: {vram_used / MB_DIVISOR:.2f} MB"
+            else:
+                value = ERROR_MSG
 
-            PerformanceLogger(
+            PerformanceLogger().log(
                 "vram_usage",
                 func.__name__,
                 value,
